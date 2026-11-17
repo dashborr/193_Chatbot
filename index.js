@@ -34,7 +34,7 @@ app.post('/api/chat', async (req, res) => {
                 },
 
                 body: JSON.stringify({
-                    model: 'baidu/ernie-5.5-flash-preview:free',
+                    model: 'inclusionai/ling-3.2-flash:free',
                     messages: messages,
                     temperature: 0.7,
                     max_tokens: 1000,
@@ -75,3 +75,72 @@ app.post('/api/chat', async (req, res) => {
             });
 
             const lines = buffer.split('\n');
+
+            // Simpan bagian terakhir yang belum lengkap
+            buffer = lines.pop();
+
+            for (const line of lines) {
+
+                const trimmedLine = line.trim();
+
+                if (!trimmedLine) {
+                    continue;
+                }
+
+                if (!trimmedLine.startsWith('data: ')) {
+                    continue;
+                }
+
+                const data = trimmedLine.slice(5).trim();
+
+                if (data === '[DONE]') {
+                    continue;
+                }
+
+                try {
+                    const json = JSON.parse(data);
+
+                    const content = json.choices[0].delta?.content;
+
+                    if (content) {
+                        res.write(
+                            `data: ${JSON.stringify(content)}\n\n`
+                        );
+                    }
+
+                } catch (error) {
+                    console.error(
+                        'Gagal parsing streaming data:',
+                        error
+                    );
+                }
+            }
+        }
+
+        // Kirim tanda streaming selesai
+        res.write('data: [DONE]\n\n');
+        res.end();
+
+    } catch (error) {
+
+        console.error('Server Error:', error);
+
+        if (!res.headersSent) {
+            res.status(500).json({
+                error: 'Terjadi kesalahan pada server'
+            });
+        } else {
+            res.write(
+                `data: ${JSON.stringify({
+                    error: 'Terjadi kesalahan pada server'
+                })}\n\n`
+            );
+
+            res.end();
+        }
+    }
+});
+
+app.listen(PORT, () => {
+    console.log(`Server berjalan di http://localhost:${PORT}`);
+});
