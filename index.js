@@ -42,3 +42,13 @@ app.post('/api/chat', async (req, res) => {
                 })
             }
         );
+
+        if (!response.ok) {
+            const errorData = await response.text();
+
+            console.error('Google AI Studio Error:', errorData);
+
+            return res.status(response.status).json({
+                error: errorData
+            });
+        }
