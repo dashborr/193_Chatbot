@@ -4,9 +4,10 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static('public'));
 
 app.get('/', (req, res) => {
@@ -14,129 +15,157 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        return res.status(500).json({
+            error: 'GEMINI_API_KEY belum diatur di file .env'
+        });
+    }
+
+    const messages = req.body?.messages;
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return res.status(400).json({
+            error: 'Messages harus berupa array yang tidak kosong'
+        });
+    }
+
+    const validMessages = messages.every(message =>
+        message &&
+        ['system', 'user', 'assistant'].includes(message.role) &&
+        typeof message.content === 'string' &&
+        message.content.trim()
+    );
+
+    if (!validMessages || !messages.some(message => message.role === 'user')) {
+        return res.status(400).json({
+            error: 'Setiap pesan harus memiliki role dan content teks yang valid'
+        });
+    }
+
+    const systemInstruction = messages
+        .filter(message => message.role === 'system')
+        .map(message => message.content)
+        .join('\n');
+
+    const contents = messages
+        .filter(message => message.role !== 'system')
+        .map(message => ({
+            role: message.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: message.content }]
+        }));
+
     try {
-        const { messages } = req.body;
-
-        if (!messages || !Array.isArray(messages)) {
-            return res.status(400).json({
-                error: 'Messages harus berupa array'
-            });
-        }
-
         const response = await fetch(
-            'https://aistudio.google.com/api-keys',
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:streamGenerateContent?alt=sse`,
             {
                 method: 'POST',
-
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${process.env.GEMINI_API_KEY}`
+                    'x-goog-api-key': apiKey
                 },
-
                 body: JSON.stringify({
-                    model: 'inclusionai/ling-3.2-flash:free',
-                    messages: messages,
-                    temperature: 0.7,
-                    max_tokens: 1000,
-                    stream: true
+                    contents,
+                    ...(systemInstruction && {
+                        systemInstruction: {
+                            parts: [{ text: systemInstruction }]
+                        }
+                    }),
+                    generationConfig: {
+                        temperature: 0.7,
+                        maxOutputTokens: 1000
+                    }
                 })
             }
         );
 
         if (!response.ok) {
-            const errorData = await response.text();
+            const errorText = await response.text();
+            let errorMessage = errorText;
 
-            console.error('Google AI Studio Error:', errorData);
+            try {
+                const errorData = JSON.parse(errorText);
+                errorMessage = errorData.error?.message || errorText;
+            } catch (error) {
+                console.error('Respons error Gemini bukan JSON:', error.message);
+            }
 
-            return res.status(response.status).json({
-                error: errorData
+            console.error(`Gemini API Error (${response.status}):`, errorMessage);
+            return res.status(response.status).json({ error: errorMessage });
+        }
+
+        if (!response.body) {
+            return res.status(502).json({
+                error: 'Gemini API tidak mengirimkan data streaming'
             });
         }
 
-        // Header untuk streaming
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
-
         let buffer = '';
 
-        while (true) {
-            const { done, value } = await reader.read();
+        const forwardData = data => {
+            if (!data || data === '[DONE]') return;
 
-            if (done) {
-                break;
+            const chunk = JSON.parse(data);
+            const text = chunk.candidates?.[0]?.content?.parts
+                ?.map(part => part.text || '')
+                .join('');
+
+            if (text) {
+                res.write(`data: ${JSON.stringify(text)}\n\n`);
+            }
+        };
+
+        const processLine = line => {
+            const trimmedLine = line.trim();
+            if (trimmedLine.startsWith('data:')) {
+                forwardData(trimmedLine.slice(5).trim());
+            }
+        };
+
+        try {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    processLine(line);
+                }
             }
 
-            buffer += decoder.decode(value, {
-                stream: true
-            });
-
-            const lines = buffer.split('\n');
-
-            // Simpan bagian terakhir yang belum lengkap
-            buffer = lines.pop();
-
-            for (const line of lines) {
-
-                const trimmedLine = line.trim();
-
-                if (!trimmedLine) {
-                    continue;
-                }
-
-                if (!trimmedLine.startsWith('data: ')) {
-                    continue;
-                }
-
-                const data = trimmedLine.slice(5).trim();
-
-                if (data === '[DONE]') {
-                    continue;
-                }
-
-                try {
-                    const json = JSON.parse(data);
-
-                    const content = json.choices[0].delta?.content;
-
-                    if (content) {
-                        res.write(
-                            `data: ${JSON.stringify(content)}\n\n`
-                        );
-                    }
-
-                } catch (error) {
-                    console.error(
-                        'Gagal parsing streaming data:',
-                        error
-                    );
-                }
+            buffer += decoder.decode();
+            if (buffer.trim()) {
+                processLine(buffer);
             }
-        }
 
-        // Kirim tanda streaming selesai
-        res.write('data: [DONE]\n\n');
-        res.end();
-
-    } catch (error) {
-
-        console.error('Server Error:', error);
-
-        if (!res.headersSent) {
-            res.status(500).json({
-                error: 'Terjadi kesalahan pada server'
-            });
-        } else {
-            res.write(
-                `data: ${JSON.stringify({
-                    error: 'Terjadi kesalahan pada server'
-                })}\n\n`
-            );
-
+            res.write('data: [DONE]\n\n');
             res.end();
+        } finally {
+            reader.releaseLock();
+        }
+    } catch (error) {
+        console.error('Gemini chat error:', error);
+
+        if (res.headersSent) {
+            if (!res.destroyed) {
+                res.write(`event: error\ndata: ${JSON.stringify({
+                    error: 'Terjadi kesalahan saat membaca respons Gemini'
+                })}\n\n`);
+                res.end();
+            }
+        } else {
+            res.status(502).json({
+                error: 'Gagal menghubungi Gemini API. Periksa koneksi dan konfigurasi API.'
+            });
         }
     }
 });

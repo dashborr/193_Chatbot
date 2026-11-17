@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Streaming Chat</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Menggunakan Marked.js untuk merender markdown dari AI -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="chat-container">
+        <header class="chat-header">
+            <h2>Gemini Chat AI</h2>
+            <p>Gemini API (Streaming)</p>
+        </header>
+
+        <div id="chat-messages" class="chat-messages">
+            <div class="message ai-message">
+                Halo! Ada yang bisa saya bantu hari ini?
+            </div>
+        </div>
+
+        <form id="chat-form" class="chat-input-form">
+            <input 
+                type="text" 
+                id="user-input" 
+                placeholder="Ketik pesan Anda di sini..." 
+                autocomplete="off" 
+                required
+            >
+            <button type="submit" id="send-button">Kirim</button>
+        </form>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
