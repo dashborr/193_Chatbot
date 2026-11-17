@@ -22,3 +22,23 @@ app.post('/api/chat', async (req, res) => {
                 error: 'Messages harus berupa array'
             });
         }
+
+        const response = await fetch(
+            'https://aistudio.google.com/api-keys',
+            {
+                method: 'POST',
+
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${process.env.GEMINI_API_KEY}`
+                },
+
+                body: JSON.stringify({
+                    model: 'baidu/ernie-5.5-flash-preview:free',
+                    messages: messages,
+                    temperature: 0.7,
+                    max_tokens: 1000,
+                    stream: true
+                })
+            }
+        );
